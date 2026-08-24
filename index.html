@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voicely - リアルタイム意見共有・投票プラットフォーム</title>
+  
+  <!-- Tailwind CSS Play CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f5f3ff',
+              100: '#ede9fe',
+              200: '#ddd6fe',
+              300: '#c4b5fd',
+              400: '#a78bfa',
+              500: '#8b5cf6',
+              600: '#7c3aed',
+              700: '#6d28d9',
+              800: '#5b21b6',
+              900: '#4c1d95',
+            },
+          },
+          animation: {
+            'bounce-subtle': 'bounceSubtle 0.5s ease-out',
+            'fade-in': 'fadeIn 0.3s ease-out',
+            'slide-in': 'slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+            'pulse-soft': 'pulseSoft 2s infinite',
+          },
+          keyframes: {
+            bounceSubtle: {
+              '0%, 100%': { transform: 'scale(1)' },
+              '50%': { transform: 'scale(1.15)' },
+            },
+            fadeIn: {
+              '0%': { opacity: '0', transform: 'translateY(10px)' },
+              '100%': { opacity: '1', transform: 'translateY(0)' },
+            },
+            slideIn: {
+              '0%': { transform: 'translateX(100%)', opacity: '0' },
+              '100%': { transform: 'translateX(0)', opacity: '1' },
+            },
+            pulseSoft: {
+              '0%, 100%': { opacity: '1' },
+              '50%': { opacity: '0.6' }
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- React & ReactDOM UMD -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <!-- Babel for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Firebase SDK (v10 Compatibility) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap');
+    
+    body {
+      font-family: 'Outfit', 'Noto Sans JP', sans-serif;
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #c4b5fd;
+      border-radius: 10px;
+    }
+    .dark ::-webkit-scrollbar-thumb {
+      background: #4c1d95;
+    }
+
+    .glass {
+      background: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+    }
+    .dark .glass {
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950 text-slate-800 dark:text-slate-100 min-h-screen transition-colors duration-300">
+  
+  <div id="root"></div>
+
+  <script type="text/babel">
+const { useState, useEffect, useMemo } = React;
+
+// ==========================================
+// 1. Firebaseの設定 (デプロイ時に書き換えてください)
+// ==========================================
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_AUTH_DOMAIN",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_STORAGE_BUCKET",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+const isFirebaseConfigured = firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY";
+let db = null;
+
+if (isFirebaseConfigured) {
+  try {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    console.log("Firebase Connected Successfully!");
+  } catch (e) {
+    console.error("Firebase Initialization Error:", e);
+  }
+}
+
+// ==========================================
+// 3. React アプリケーション本体
+// ==========================================
+function App() {
+  const [posts, setPosts] = useState([]);
+  const [announcement, setAnnouncement] = useState(null);
+  const [poll, setPoll] = useState(null);
+  const [customLink, setCustomLink] = useState(null);
+
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isAdminMode, setIsAdminMode] = useState(false);
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
+  const [bannedUsers, setBannedUsers] = useState([]);
+
+  const [formName, setFormName] = useState("");
+  const [formContent, setFormContent] = useState("");
+  const [formTagInput, setFormTagInput] = useState("");
+
+  const [adminAnnounceInput, setAdminAnnounceInput] = useState("");
+  const [adminPollQuestion, setAdminPollQuestion] = useState("");
+  const [adminPollOptions, setAdminPollOptions] = useState(["", ""]);
+  const [adminLinkText, setAdminLinkText] = useState("");
+  const [adminLinkUrl, setAdminLinkUrl] = useState("");
+
+  const [sortBy, setSortBy] = useState("newest");
+  const [selectedTag, setSelectedTag] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [userId, setUserId] = useState("");
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    let storedId = localStorage.getItem("voicely_user_id");
+    if (!storedId) {
+      storedId = "user-" + Math.random().toString(36).substring(2, 11);
+      localStorage.setItem("voicely_user_id", storedId);
+    }
+    setUserId(storedId);
+
+    const savedTheme = localStorage.getItem("voicely_theme");
+    if (savedTheme === "dark" || !savedTheme && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      setIsDarkMode(true);
+      document.documentElement.classList.add("dark");
+    }
+  }, []);
+
+  const showToast = (message, type = "success") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const toggleDarkMode = () => {
+    if (isDarkMode) {
+      document.documentElement.classList.remove("dark");
+      localStorage.setItem("voicely_theme", "light");
+    } else {
+      document.documentElement.classList.add("dark");
+      localStorage.setItem("voicely_theme", "dark");
+    }
+    setIsDarkMode(!isDarkMode);
+  };
+
+  useEffect(() => {
+    if (db) {
+      // --- [本物] Firebase Firestore 同期 ---
+      const unsubscribePosts = db.collection("posts").
+      where("isDeleted", "==", false).
+      orderBy("createdAt", "desc").
+      onSnapshot((snapshot) => {
+        const list = [];
+        snapshot.forEach((doc) => list.push({ id: doc.id, ...doc.data() }));
+        setPosts(list);
+      });
+
+      const unsubscribeAnnounce = db.collection("settings").doc("announcement").
+      onSnapshot((doc) => {
+        if (doc.exists) setAnnouncement(doc.data());else
+        setAnnouncement(null);
+      });
+
+      const unsubscribePoll = db.collection("settings").doc("active_poll").
+      onSnapshot((doc) => {
+        if (doc.exists) setPoll(doc.data());else
+        setPoll(null);
+      });
+
+      const unsubscribeLink = db.collection("settings").doc("custom_link").
+      onSnapshot((doc) => {
+        if (doc.exists) setCustomLink(doc.data());else
+        setCustomLink(null);
+      });
+
+      const unsubscribeBan = db.collection("banned_users").
+      onSnapshot((snapshot) => {
+        const list = [];
+        snapshot.forEach((doc) => list.push(doc.id));
+        setBannedUsers(list);
+      });
+
+      return () => {
+        unsubscribePosts();
+        unsubscribeAnnounce();
+        unsubscribePoll();
+        unsubscribeLink();
+        unsubscribeBan();
+      };
+    } else {
+      // --- [デモ] ローカルストレージ ＆ シミュレータ ---
+      const localPosts = localStorage.getItem("voicely_posts_v2");
+      const localAnnounce = localStorage.getItem("voicely_announce_v2");
+      const localPoll = localStorage.getItem("voicely_poll_v2");
+      const localLink = localStorage.getItem("voicely_link_v2");
+      const localBans = localStorage.getItem("voicely_bans_v2");
+
+      if (localPosts) setPosts(JSON.parse(localPosts));else
+      {
+        setPosts(initialMockPosts);
+        localStorage.setItem("voicely_posts_v2", JSON.stringify(initialMockPosts));
+      }
+
+      if (localAnnounce) setAnnouncement(JSON.parse(localAnnounce));else
+      {
+        setAnnouncement(initialMockAnnouncement);
+        localStorage.setItem("voicely_announce_v2", JSON.stringify(initialMockAnnouncement));
+      }
+
+      if (localPoll) setPoll(JSON.parse(localPoll));else
+      {
+        setPoll(initialMockPoll);
+        localStorage.setItem("voicely_poll_v2", JSON.stringify(initialMockPoll));
+      }
+
+      if (localLink) setCustomLink(JSON.parse(localLink));else
+      {
+        setCustomLink(initialMockLink);
+        localStorage.setItem("voicely_link_v2", JSON.stringify(initialMockLink));
+      }
+
+      if (localBans) setBannedUsers(JSON.parse(localBans));
+
+      // 25秒ごとに他人の意見投稿をシミュレート
+      const postInterval = setInterval(() => {
+        const randomName = mockNames[Math.floor(Math.random() * mockNames.length)];
+        const randomContent = mockContents[Math.floor(Math.random() * mockContents.length)];
+        const randomTags = mockTagsList[Math.floor(Math.random() * mockTagsList.length)];
+
+        const newPost = {
+          id: "mock-" + Date.now(),
+          name: randomName,
+          content: randomContent,
+          tags: randomTags,
+          likes: Math.floor(Math.random() * 5),
+          likedBy: [],
+          createdAt: new Date().toISOString(),
+          isDeleted: false,
+          authorId: "mock-user-" + Math.random().toString(36).substring(2, 5)
+        };
+
+        setPosts((prev) => {
+          const updated = [newPost, ...prev];
+          localStorage.setItem("voicely_posts_v2", JSON.stringify(updated));
+          return updated;
+        });
+        showToast(`新着意見: ${randomName}さん`, "info");
+      }, 25000);
+
+      // 12秒ごとに投票アクションをシミュレート
+      const voteInterval = setInterval(() => {
+        setPoll((prev) => {
+          if (!prev || !prev.isActive) return prev;
+          const optionCount = prev.options.length;
+          const randomOptionIdx = Math.floor(Math.random() * optionCount).toString();
+          const updatedVotes = {
+            ...prev.votes,
+            [randomOptionIdx]: (prev.votes[randomOptionIdx] || 0) + 1
+          };
+          const updatedPoll = { ...prev, votes: updatedVotes };
+          localStorage.setItem("voicely_poll_v2", JSON.stringify(updatedPoll));
+          return updatedPoll;
+        });
+      }, 12000);
+
+      return () => {
+        clearInterval(postInterval);
+        clearInterval(voteInterval);
+      };
+    }
+  }, [db]);
+
+  const handlePostSubmit = async (e) => {
+    e.preventDefault();
+    if (bannedUsers.includes(userId)) {
+      showToast("アカウント制限中のため投稿できません。", "error");
+      return;
+    }
+
+    if (!formContent.trim()) return;
+
+    const tags = formTagInput.
+    split(/[#、,，\s]+/).
+    map((t) => t.trim()).
+    filter((t) => t.length > 0).
+    slice(0, 5);
+
+    const newPost = {
+      name: formName.trim() || "ユーザー",
+      content: formContent.trim(),
+      tags,
+      likes: 0,
+      likedBy: [],
+      createdAt: new Date().toISOString(),
+      isDeleted: false,
+      authorId: userId
+    };
+
+    if (db) {
+      try {
+        await db.collection("posts").add(newPost);
+        showToast("意見を投稿しました！");
+      } catch (e) {
+        showToast("投稿に失敗しました。", "error");
+      }
+    } else {
+      const updated = [{ id: "post-" + Date.now(), ...newPost }, ...posts];
+      setPosts(updated);
+      localStorage.setItem("voicely_posts_v2", JSON.stringify(updated));
+      showToast("投稿しました ");
+    }
+
+    setFormContent("");
+    setFormTagInput("");
+  };
+
+  const handleLike = async (postId) => {
+    if (bannedUsers.includes(userId)) {
+      showToast("アカウント制限中のためいいね！できません。", "error");
+      return;
+    }
+
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+
+    const hasLiked = post.likedBy && post.likedBy.includes(userId);
+
+    if (db) {
+      const postRef = db.collection("posts").doc(postId);
+      try {
+        if (hasLiked) {
+          await postRef.update({
+            likes: firebase.firestore.FieldValue.increment(-1),
+            likedBy: firebase.firestore.FieldValue.arrayRemove(userId)
+          });
+        } else {
+          await postRef.update({
+            likes: firebase.firestore.FieldValue.increment(1),
+            likedBy: firebase.firestore.FieldValue.arrayUnion(userId)
+          });
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      const updated = posts.map((p) => {
+        if (p.id === postId) {
+          const likedBy = p.likedBy || [];
+          if (hasLiked) {
+            return { ...p, likes: Math.max(0, p.likes - 1), likedBy: likedBy.filter((id) => id !== userId) };
+          } else {
+            return { ...p, likes: p.likes + 1, likedBy: [...likedBy, userId] };
+          }
+        }
+        return p;
+      });
+      setPosts(updated);
+      localStorage.setItem("voicely_posts_v2", JSON.stringify(updated));
+    }
+  };
+
+  const handleVote = async (optionIndex) => {
+    if (bannedUsers.includes(userId)) {
+      showToast("アカウント制限中のため投票できません。", "error");
+      return;
+    }
+
+    if (!poll || !poll.isActive) return;
+
+    const hasVoted = poll.votedUsers && poll.votedUsers.includes(userId);
+    if (hasVoted) {
+      showToast("この投票はすでに回答済みです。", "error");
+      return;
+    }
+
+    if (db) {
+      const pollRef = db.collection("settings").doc("active_poll");
+      try {
+        await db.runTransaction(async (transaction) => {
+          const sfDoc = await transaction.get(pollRef);
+          if (!sfDoc.exists) return;
+
+          const currentVotes = sfDoc.data().votes || {};
+          const currentVotedUsers = sfDoc.data().votedUsers || [];
+
+          transaction.update(pollRef, {
+            [`votes.${optionIndex}`]: (currentVotes[optionIndex] || 0) + 1,
+            votedUsers: [...currentVotedUsers, userId]
+          });
+        });
+        showToast("投票を受け付けました！");
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      const votedUsers = poll.votedUsers || [];
+      const updatedVotes = {
+        ...poll.votes,
+        [optionIndex]: (poll.votes[optionIndex] || 0) + 1
+      };
+      const updatedPoll = {
+        ...poll,
+        votes: updatedVotes,
+        votedUsers: [...votedUsers, userId]
+      };
+      setPoll(updatedPoll);
+      localStorage.setItem("voicely_poll_v2", JSON.stringify(updatedPoll));
+      showToast("投票を受け付けました ");
+    }
+  };
+
+  const handleAdminLogin = (e) => {
+    e.preventDefault();
+    if (adminPassword === "rtu45789") {
+      setIsAdminMode(true);
+      setShowAdminLogin(false);
+      setAdminPassword("");
+
+      if (announcement) setAdminAnnounceInput(announcement.content);
+      if (customLink) {
+        setAdminLinkText(customLink.text);
+        setAdminLinkUrl(customLink.url);
+      }
+      if (poll) {
+        setAdminPollQuestion(poll.question);
+        setAdminPollOptions(poll.options);
+      }
+
+      showToast("管理者モードがオンになりました", "info");
+    } else {
+      showToast("パスワードが違います", "error");
+    }
+  };
+
+  const handleUpdateAnnouncement = async (e) => {
+    e.preventDefault();
+    if (!isAdminMode) return;
+
+    const data = {
+      content: adminAnnounceInput.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    if (db) {
+      await db.collection("settings").doc("announcement").set(data);
+    } else {
+      setAnnouncement(data);
+      localStorage.setItem("voicely_announce_v2", JSON.stringify(data));
+    }
+    showToast("お知らせを更新しました");
+  };
+
+  const handleDeleteAnnouncement = async () => {
+    if (!isAdminMode) return;
+    if (db) {
+      await db.collection("settings").doc("announcement").delete();
+    } else {
+      setAnnouncement(null);
+      localStorage.removeItem("voicely_announce_v2");
+    }
+    setAdminAnnounceInput("");
+    showToast("お知らせを削除しました");
+  };
+
+  const handleCreatePoll = async (e) => {
+    e.preventDefault();
+    if (!isAdminMode) return;
+
+    const cleanOptions = adminPollOptions.map((o) => o.trim()).filter((o) => o.length > 0);
+    if (!adminPollQuestion.trim() || cleanOptions.length < 2) {
+      showToast("質問と2つ以上の選択肢を入力してください", "error");
+      return;
+    }
+
+    const initialVotes = {};
+    cleanOptions.forEach((_, idx) => initialVotes[idx] = 0);
+
+    const newPoll = {
+      id: "poll-" + Date.now(),
+      question: adminPollQuestion.trim(),
+      options: cleanOptions,
+      votes: initialVotes,
+      votedUsers: [],
+      isActive: true,
+      createdAt: new Date().toISOString()
+    };
+
+    if (db) {
+      await db.collection("settings").doc("active_poll").set(newPoll);
+    } else {
+      setPoll(newPoll);
+      localStorage.setItem("voicely_poll_v2", JSON.stringify(newPoll));
+    }
+    showToast("投票を開始しました");
+  };
+
+  const handleClosePoll = async () => {
+    if (!isAdminMode || !poll) return;
+    const updatedPoll = { ...poll, isActive: false };
+
+    if (db) {
+      await db.collection("settings").doc("active_poll").update({ isActive: false });
+    } else {
+      setPoll(updatedPoll);
+      localStorage.setItem("voicely_poll_v2", JSON.stringify(updatedPoll));
+    }
+    showToast("投票を終了しました");
+  };
+
+  const handleUpdateLink = async (e) => {
+    e.preventDefault();
+    if (!isAdminMode) return;
+
+    const data = {
+      text: adminLinkText.trim(),
+      url: adminLinkUrl.trim()
+    };
+
+    if (db) {
+      await db.collection("settings").doc("custom_link").set(data);
+    } else {
+      setCustomLink(data);
+      localStorage.setItem("voicely_link_v2", JSON.stringify(data));
+    }
+    showToast("リンクを更新しました");
+  };
+
+  const handleDeleteLink = async () => {
+    if (!isAdminMode) return;
+    if (db) {
+      await db.collection("settings").doc("custom_link").delete();
+    } else {
+      setCustomLink(null);
+      localStorage.removeItem("voicely_link_v2");
+    }
+    setAdminLinkText("");
+    setAdminLinkUrl("");
+    showToast("リンクを削除しました");
+  };
+
+  const handleDeletePost = async (postId) => {
+    if (!isAdminMode) return;
+    if (db) {
+      await db.collection("posts").doc(postId).update({ isDeleted: true });
+    } else {
+      const updated = posts.filter((p) => p.id !== postId);
+      setPosts(updated);
+      localStorage.setItem("voicely_posts_v2", JSON.stringify(updated));
+    }
+    showToast("投稿を削除しました");
+  };
+
+  const handleToggleBan = async (authorId) => {
+    if (!isAdminMode || !authorId) return;
+    const isBanned = bannedUsers.includes(authorId);
+
+    if (db) {
+      if (isBanned) {
+        await db.collection("banned_users").doc(authorId).delete();
+      } else {
+        await db.collection("banned_users").doc(authorId).set({ bannedAt: new Date().toISOString() });
+      }
+    } else {
+      let updatedBans;
+      if (isBanned) {
+        updatedBans = bannedUsers.filter((id) => id !== authorId);
+      } else {
+        updatedBans = [...bannedUsers, authorId];
+      }
+      setBannedUsers(updatedBans);
+      localStorage.setItem("voicely_bans_v2", JSON.stringify(updatedBans));
+    }
+    showToast(isBanned ? "BANを解除しました" : "ユーザーをBANしました", isBanned ? "info" : "error");
+  };
+
+  const pollStats = useMemo(() => {
+    if (!poll) return { total: 0, percentages: [] };
+    const votes = poll.votes || {};
+    const total = Object.values(votes).reduce((sum, v) => sum + v, 0);
+    const percentages = poll.options.map((_, idx) => {
+      if (total === 0) return 0;
+      return Math.round((votes[idx] || 0) / total * 100);
+    });
+    return { total, percentages };
+  }, [poll]);
+
+  const filteredAndSortedPosts = useMemo(() => {
+    let result = [...posts].filter((p) => !p.isDeleted);
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter((p) =>
+      p.name.toLowerCase().includes(q) ||
+      p.content.toLowerCase().includes(q) ||
+      p.tags.some((t) => t.toLowerCase().includes(q))
+      );
+    }
+    if (selectedTag) {
+      result = result.filter((p) => p.tags.includes(selectedTag));
+    }
+    if (sortBy === "newest") {
+      result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    } else if (sortBy === "popular") {
+      result.sort((a, b) => b.likes - a.likes);
+    }
+    return result;
+  }, [posts, sortBy, selectedTag, searchQuery]);
+
+  const allTagsWithCount = useMemo(() => {
+    const counts = {};
+    posts.forEach((p) => {
+      if (p.isDeleted) return;
+      (p.tags || []).forEach((tag) => {
+        counts[tag] = (counts[tag] || 0) + 1;
+      });
+    });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  }, [posts]);
+
+  return (/*#__PURE__*/
+    React.createElement("div", { className: "max-w-6xl mx-auto px-4 py-6 md:py-10" }, /*#__PURE__*/
+
+
+    React.createElement("header", { className: "flex flex-col sm:flex-row items-center justify-between gap-4 mb-6 pb-6 border-b border-purple-100 dark:border-slate-800" }, /*#__PURE__*/
+    React.createElement("div", { className: "flex items-center gap-3" }, /*#__PURE__*/
+    React.createElement("div", { className: "w-12 h-12 rounded-2xl bg-gradient-to-tr from-brand-500 to-purple-600 flex items-center justify-center shadow-lg shadow-purple-200" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "message-square", className: "text-white w-6 h-6" })
+    ), /*#__PURE__*/
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("h1", { className: "text-2xl md:text-3xl font-bold bg-gradient-to-r from-brand-600 to-purple-600 dark:from-brand-400 dark:to-purple-400 bg-clip-text text-transparent" }, "Voicely"
+
+    ), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs text-slate-500 dark:text-slate-400 mt-0.5" }, "\u30EA\u30A2\u30EB\u30BF\u30A4\u30E0\u610F\u898B\u5171\u6709 \uFF06 \u6295\u7968"
+
+    )
+    ),
+    !isFirebaseConfigured && /*#__PURE__*/
+    React.createElement("span", { className: "ml-2 px-2.5 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 rounded-full border border-amber-200" }, "9/12 \u5BFA\u5B50\u5C4B\u9996\u90FD\u570F\u5927\u5B66\u7DE8"
+
+    )
+
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "flex items-center gap-4" },
+    customLink && customLink.url && /*#__PURE__*/
+    React.createElement("a", {
+      href: customLink.url,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      className: "text-xs font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300 flex items-center gap-1 bg-brand-50 dark:bg-brand-950/30 px-3 py-1.5 rounded-full border border-brand-100 dark:border-brand-900/40 transition hover:scale-105" }, /*#__PURE__*/
+
+    React.createElement("i", { "data-lucide": "external-link", className: "w-3.5 h-3.5" }),
+    customLink.text || "リンク"
+    ), /*#__PURE__*/
+
+
+    React.createElement("div", { className: "flex items-center gap-2" },
+    isAdminMode ? /*#__PURE__*/
+    React.createElement("button", {
+      onClick: () => setIsAdminMode(false),
+      className: "px-3.5 py-1.5 text-xs font-semibold bg-rose-500 text-white rounded-xl shadow hover:bg-rose-600 transition flex items-center gap-1.5" }, /*#__PURE__*/
+
+    React.createElement("i", { "data-lucide": "shield-alert", className: "w-3.5 h-3.5" }), "\u7BA1\u7406\u7D42\u4E86"
+
+    ) : /*#__PURE__*/
+
+    React.createElement("button", {
+      onClick: () => setShowAdminLogin(true),
+      className: "px-3.5 py-1.5 text-xs font-semibold bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition flex items-center gap-1.5" }, /*#__PURE__*/
+
+    React.createElement("i", { "data-lucide": "shield", className: "w-3.5 h-3.5" }), "\u7BA1\u7406\u8005"
+
+    ), /*#__PURE__*/
+
+
+    React.createElement("button", {
+      onClick: toggleDarkMode,
+      className: "w-9 h-9 flex items-center justify-center bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm hover:scale-105 transition" }, /*#__PURE__*/
+
+    React.createElement("i", { "data-lucide": isDarkMode ? "sun" : "moon", className: "w-5 h-5" })
+    )
+    )
+    )
+    ),
+
+
+    showAdminLogin && /*#__PURE__*/
+    React.createElement("div", { className: "fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" }, /*#__PURE__*/
+    React.createElement("div", { className: "bg-white dark:bg-slate-800 rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl border border-slate-100 dark:border-slate-700 animate-fade-in" }, /*#__PURE__*/
+    React.createElement("div", { className: "flex justify-between items-center mb-6" }, /*#__PURE__*/
+    React.createElement("h3", { className: "text-lg font-bold flex items-center gap-2" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "lock", className: "w-5 h-5 text-brand-500" }), "\u7BA1\u7406\u8005\u8A8D\u8A3C"
+
+    ), /*#__PURE__*/
+    React.createElement("button", { onClick: () => setShowAdminLogin(false), className: "text-slate-400 hover:text-slate-600" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "x", className: "w-5 h-5" })
+    )
+    ), /*#__PURE__*/
+    React.createElement("form", { onSubmit: handleAdminLogin, className: "space-y-4" }, /*#__PURE__*/
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("label", { className: "block text-xs text-slate-500 dark:text-slate-400 mb-1.5" }, "\u7BA1\u7406\u8005\u30D1\u30B9\u30EF\u30FC\u30C9"), /*#__PURE__*/
+    React.createElement("input", {
+      type: "password",
+      placeholder: "\u30D1\u30B9\u30EF\u30FC\u30C9: abc123",
+      value: adminPassword,
+      onChange: (e) => setAdminPassword(e.target.value),
+      className: "w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm",
+      autoFocus: true }
+    )
+    ), /*#__PURE__*/
+    React.createElement("button", { type: "submit", className: "w-full py-2.5 bg-gradient-to-r from-brand-500 to-purple-600 text-white rounded-xl font-semibold text-sm hover:opacity-90 transition" }, "\u30ED\u30B0\u30A4\u30F3\u3059\u308B"
+
+    )
+    )
+    )
+    ),
+
+
+
+    isAdminMode && /*#__PURE__*/
+    React.createElement("section", { className: "mb-8 p-6 bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-3xl animate-fade-in grid grid-cols-1 md:grid-cols-3 gap-6" }, /*#__PURE__*/
+    React.createElement("div", { className: "space-y-3" }, /*#__PURE__*/
+    React.createElement("h3", { className: "text-sm font-bold flex items-center gap-1.5 text-brand-600 dark:text-brand-400" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "megaphone", className: "w-4 h-4" }), "\u30E1\u30C3\u30BB\u30FC\u30B8\u30D4\u30F3\u7559\u3081\u8A2D\u5B9A"
+
+    ), /*#__PURE__*/
+    React.createElement("form", { onSubmit: handleUpdateAnnouncement, className: "space-y-2" }, /*#__PURE__*/
+    React.createElement("textarea", {
+      value: adminAnnounceInput,
+      onChange: (e) => setAdminAnnounceInput(e.target.value),
+      placeholder: "\u304A\u77E5\u3089\u305B\u3092\u5165\u529B...",
+      rows: "2",
+      className: "w-full px-3 py-2 text-xs bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none" }
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "flex gap-2" }, /*#__PURE__*/
+    React.createElement("button", { type: "submit", className: "flex-1 py-1.5 text-[11px] font-semibold bg-brand-500 text-white rounded-lg hover:bg-brand-600" }, "\u66F4\u65B0\u3059\u308B"
+
+    ),
+    announcement && /*#__PURE__*/
+    React.createElement("button", { type: "button", onClick: handleDeleteAnnouncement, className: "px-2 py-1.5 text-[11px] font-semibold bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100" }, "\u524A\u9664"
+
+    )
+
+    )
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "space-y-3" }, /*#__PURE__*/
+    React.createElement("h3", { className: "text-sm font-bold flex items-center gap-1.5 text-brand-600 dark:text-brand-400" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "vote", className: "w-4 h-4" }), "\u65B0\u898F\u6295\u7968\u306E\u958B\u59CB"
+
+    ), /*#__PURE__*/
+    React.createElement("form", { onSubmit: handleCreatePoll, className: "space-y-2" }, /*#__PURE__*/
+    React.createElement("input", {
+      type: "text",
+      placeholder: "\u304A\u984C\u3092\u5165\u529B (\u4F8B: \u597D\u304D\u306AOS\u306F\uFF1F)",
+      value: adminPollQuestion,
+      onChange: (e) => setAdminPollQuestion(e.target.value),
+      className: "w-full px-3 py-1.5 text-xs bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none" }
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "space-y-1" },
+    adminPollOptions.map((opt, idx) => /*#__PURE__*/
+    React.createElement("input", {
+      key: idx,
+      type: "text",
+      placeholder: `選択肢 ${idx + 1}`,
+      value: opt,
+      onChange: (e) => {
+        const updated = [...adminPollOptions];
+        updated[idx] = e.target.value;
+        setAdminPollOptions(updated);
+      },
+      className: "w-full px-3 py-1 text-[11px] bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700" }
+    )
+    )
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "flex gap-1.5" }, /*#__PURE__*/
+    React.createElement("button", {
+      type: "button",
+      onClick: () => setAdminPollOptions([...adminPollOptions, ""]),
+      disabled: adminPollOptions.length >= 4,
+      className: "px-2 py-1 text-[10px] bg-slate-200 dark:bg-slate-700 rounded-lg disabled:opacity-50" },
+    "+ \u9078\u629E\u80A2\u8FFD\u52A0"
+
+    ), /*#__PURE__*/
+    React.createElement("button", {
+      type: "button",
+      onClick: () => setAdminPollOptions(adminPollOptions.slice(0, -1)),
+      disabled: adminPollOptions.length <= 2,
+      className: "px-2 py-1 text-[10px] bg-slate-200 dark:bg-slate-700 rounded-lg disabled:opacity-50" },
+    "- \u524A\u9664"
+
+    )
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "flex gap-2" }, /*#__PURE__*/
+    React.createElement("button", { type: "submit", className: "flex-1 py-1.5 text-[11px] font-semibold bg-brand-500 text-white rounded-lg hover:bg-brand-600" }, "\u6295\u7968\u958B\u59CB"
+
+    ),
+    poll && poll.isActive && /*#__PURE__*/
+    React.createElement("button", { type: "button", onClick: handleClosePoll, className: "px-2 py-1.5 text-[11px] font-semibold bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100" }, "\u7D42\u4E86"
+
+    )
+
+    )
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "space-y-3" }, /*#__PURE__*/
+    React.createElement("h3", { className: "text-sm font-bold flex items-center gap-1.5 text-brand-600 dark:text-brand-400" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "link", className: "w-4 h-4" }), "\u30D8\u30C3\u30C0\u30FC\u306E\u30EA\u30F3\u30AF\u8A2D\u5B9A"
+
+    ), /*#__PURE__*/
+    React.createElement("form", { onSubmit: handleUpdateLink, className: "space-y-2" }, /*#__PURE__*/
+    React.createElement("input", {
+      type: "text",
+      placeholder: "\u30EA\u30F3\u30AF\u8868\u793A\u30C6\u30AD\u30B9\u30C8",
+      value: adminLinkText,
+      onChange: (e) => setAdminLinkText(e.target.value),
+      className: "w-full px-3 py-1.5 text-xs bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none" }
+    ), /*#__PURE__*/
+    React.createElement("input", {
+      type: "url",
+      placeholder: "URL (https://...)",
+      value: adminLinkUrl,
+      onChange: (e) => setAdminLinkUrl(e.target.value),
+      className: "w-full px-3 py-1.5 text-xs bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none" }
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "flex gap-2" }, /*#__PURE__*/
+    React.createElement("button", { type: "submit", className: "flex-1 py-1.5 text-[11px] font-semibold bg-brand-500 text-white rounded-lg hover:bg-brand-600" }, "\u8A2D\u5B9A\u3059\u308B"
+
+    ),
+    customLink && /*#__PURE__*/
+    React.createElement("button", { type: "button", onClick: handleDeleteLink, className: "px-2 py-1.5 text-[11px] font-semibold bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100" }, "\u524A\u9664"
+
+    )
+
+    )
+    )
+    )
+    ), /*#__PURE__*/
+
+
+
+    React.createElement("div", { className: "grid grid-cols-1 lg:grid-cols-12 gap-8" }, /*#__PURE__*/
+
+
+    React.createElement("div", { className: "lg:col-span-4 space-y-6" },
+    bannedUsers.includes(userId) && /*#__PURE__*/
+    React.createElement("div", { className: "p-4 bg-rose-50 border border-rose-200 text-rose-800 dark:bg-rose-950/30 dark:border-rose-900/50 dark:text-rose-300 rounded-2xl flex items-start gap-3 animate-fade-in" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "alert-octagon", className: "w-5 h-5 text-rose-500 shrink-0 mt-0.5" }), /*#__PURE__*/
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("h4", { className: "font-semibold text-sm" }, "\u66F8\u304D\u8FBC\u307F\u5236\u9650\u4E2D"), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs mt-1 opacity-90" }, "\u3042\u306A\u305F\u306E\u30A2\u30AB\u30A6\u30F3\u30C8\u306F\u7BA1\u7406\u8005\u306B\u3088\u3063\u3066\u5236\u9650\u3055\u308C\u3066\u3044\u307E\u3059\u3002\u6295\u7A3F\u3001\u3044\u3044\u306D\uFF01\u3001\u6295\u7968\u306F\u884C\u3048\u307E\u305B\u3093\u3002")
+    )
+    ), /*#__PURE__*/
+
+
+
+    React.createElement("div", { className: "glass rounded-3xl p-6 shadow-xl shadow-purple-100/50 dark:shadow-none border border-white/60 dark:border-slate-800" }, /*#__PURE__*/
+    React.createElement("h2", { className: "text-lg font-bold mb-4 flex items-center gap-2" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "pen-tool", className: "w-5 h-5 text-brand-500" }), "\u3042\u306A\u305F\u306E\u610F\u898B\u3092\u5C4A\u3051\u308B"
+
+    ), /*#__PURE__*/
+
+    React.createElement("form", { onSubmit: handlePostSubmit, className: "space-y-4" }, /*#__PURE__*/
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("label", { className: "block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5" }, "\u304A\u540D\u524D (\u4EFB\u610F)"), /*#__PURE__*/
+    React.createElement("input", {
+      type: "text",
+      placeholder: "\u533F\u540D\u30E6\u30FC\u30B6\u30FC",
+      value: formName,
+      onChange: (e) => setFormName(e.target.value.slice(0, 20)),
+      className: "w-full px-4 py-2.5 bg-white/50 dark:bg-slate-900/50 rounded-2xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm transition" }
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("label", { className: "block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5" }, "\u610F\u898B\u5185\u5BB9 (\u5FC5\u9808)"), /*#__PURE__*/
+    React.createElement("textarea", {
+      placeholder: "\u3053\u3053\u306B\u3042\u306A\u305F\u306E\u610F\u898B\u3084\u30A2\u30A4\u30C7\u30A2\u3092\u66F8\u3044\u3066\u304F\u3060\u3055\u3044\uFF08\u6700\u5927200\u6587\u5B57\uFF09",
+      required: true,
+      rows: "4",
+      value: formContent,
+      onChange: (e) => setFormContent(e.target.value.slice(0, 200)),
+      className: "w-full px-4 py-2.5 bg-white/50 dark:bg-slate-900/50 rounded-2xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm transition resize-none" }
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "text-right text-[10px] text-slate-400 mt-1" },
+    formContent.length, " / 200\u6587\u5B57"
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("label", { className: "block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5" }, "\u30BF\u30B0 (\u4EFB\u610F)"), /*#__PURE__*/
+    React.createElement("input", {
+      type: "text",
+      placeholder: "\u4F8B: \u30C7\u30B6\u30A4\u30F3, \u30EA\u30A2\u30EB\u30BF\u30A4\u30E0",
+      value: formTagInput,
+      onChange: (e) => setFormTagInput(e.target.value),
+      className: "w-full px-4 py-2.5 bg-white/50 dark:bg-slate-900/50 rounded-2xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm transition" }
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("button", {
+      type: "submit",
+      disabled: bannedUsers.includes(userId),
+      className: "w-full py-3 bg-gradient-to-r from-brand-500 to-purple-600 hover:from-brand-600 hover:to-purple-700 text-white rounded-2xl font-bold text-sm shadow-md disabled:opacity-50 transition duration-200 flex items-center justify-center gap-2" }, /*#__PURE__*/
+
+    React.createElement("i", { "data-lucide": "send", className: "w-4 h-4" }), "\u610F\u898B\u3092\u9001\u4FE1\u3059\u308B"
+
+    )
+    )
+    ),
+
+
+    poll && /*#__PURE__*/
+    React.createElement("div", { className: "glass rounded-3xl p-6 shadow-xl shadow-purple-100/50 dark:shadow-none border border-white/60 dark:border-slate-800" }, /*#__PURE__*/
+    React.createElement("div", { className: "flex justify-between items-center mb-3" }, /*#__PURE__*/
+    React.createElement("h3", { className: "text-sm font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "vote", className: "w-4 h-4 text-brand-500 animate-pulse-soft" }), "\u30EA\u30A2\u30EB\u30BF\u30A4\u30E0\u6295\u7968"
+
+    ), /*#__PURE__*/
+    React.createElement("span", { className: `px-2 py-0.5 text-[9px] rounded-full font-semibold ${
+      poll.isActive ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"}` },
+
+    poll.isActive ? "開催中" : "終了"
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("h4", { className: "font-semibold text-sm mb-4 leading-snug" }, poll.question), /*#__PURE__*/
+
+    React.createElement("div", { className: "space-y-3" },
+    poll.options.map((option, idx) => {
+      const votesForOption = poll.votes?.[idx] || 0;
+      const hasVoted = poll.votedUsers && poll.votedUsers.includes(userId);
+      const percent = pollStats.percentages[idx] || 0;
+
+      return (/*#__PURE__*/
+        React.createElement("div", { key: idx, className: "space-y-1" },
+        poll.isActive && !hasVoted && !bannedUsers.includes(userId) ? /*#__PURE__*/
+        React.createElement("button", {
+          onClick: () => handleVote(idx),
+          className: "w-full py-2 px-3 text-xs text-left bg-white/60 dark:bg-slate-900/40 hover:bg-brand-50 dark:hover:bg-brand-950/20 border border-slate-200 dark:border-slate-800 rounded-xl transition duration-200 flex justify-between items-center font-medium" }, /*#__PURE__*/
+
+        React.createElement("span", null, option), /*#__PURE__*/
+        React.createElement("i", { "data-lucide": "chevron-right", className: "w-3.5 h-3.5 text-slate-400" })
+        ) : /*#__PURE__*/
+
+        React.createElement("div", { className: "relative overflow-hidden bg-slate-100/50 dark:bg-slate-900/30 border border-slate-200/40 dark:border-slate-800/40 p-2.5 rounded-xl text-xs" }, /*#__PURE__*/
+        React.createElement("div", { className: "flex justify-between items-center relative z-10 font-medium" }, /*#__PURE__*/
+        React.createElement("span", { className: "opacity-90" }, option), /*#__PURE__*/
+        React.createElement("span", { className: "text-[10px] text-slate-500 dark:text-slate-400" }, votesForOption, " \u7968 (", percent, "%)")
+        ), /*#__PURE__*/
+        React.createElement("div", {
+          className: "absolute inset-y-0 left-0 bg-brand-100 dark:bg-brand-900/40 transition-all duration-1000 ease-out",
+          style: { width: `${percent}%` } }
+        )
+        )
+
+        ));
+
+    })
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "text-[10px] text-slate-400 mt-4 text-center" }, "\u7DCF\u5F97\u7968\u6570: ",
+    pollStats.total, " \u7968",
+    poll.votedUsers?.includes(userId) && " (回答済み)"
+    )
+    )
+
+    ), /*#__PURE__*/
+
+
+    React.createElement("div", { className: "lg:col-span-8 space-y-6" },
+
+
+    announcement && /*#__PURE__*/
+    React.createElement("div", { className: "relative overflow-hidden bg-gradient-to-r from-amber-50 to-orange-50 dark:from-slate-900 dark:to-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 rounded-3xl p-5 md:p-6 shadow-md animate-fade-in flex items-start gap-4" }, /*#__PURE__*/
+    React.createElement("div", { className: "w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-950/60 flex items-center justify-center text-amber-600 shrink-0" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "megaphone", className: "w-5 h-5" })
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "space-y-1" }, /*#__PURE__*/
+    React.createElement("div", { className: "flex items-center gap-2" }, /*#__PURE__*/
+    React.createElement("span", { className: "text-xs font-bold text-amber-800 dark:text-amber-400 tracking-wider" }, "ADMIN MESSAGE"), /*#__PURE__*/
+    React.createElement("span", { className: "text-[9px] text-amber-600 dark:text-amber-500" },
+    new Date(announcement.createdAt).toLocaleDateString()
+    )
+    ), /*#__PURE__*/
+    React.createElement("p", { className: "text-sm font-medium leading-relaxed text-slate-800 dark:text-slate-200 whitespace-pre-wrap" },
+    announcement.content
+    )
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "absolute right-4 top-4" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "pin", className: "w-4 h-4 text-amber-400 rotate-45" })
+    )
+    ), /*#__PURE__*/
+
+
+
+    React.createElement("div", { className: "glass rounded-3xl p-4 md:p-6 shadow-xl shadow-purple-100/50 dark:shadow-none border border-white/60 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4" }, /*#__PURE__*/
+    React.createElement("div", { className: "relative flex-1" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "search", className: "absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" }), /*#__PURE__*/
+    React.createElement("input", {
+      type: "text",
+      placeholder: "\u610F\u898B\u3092\u691C\u7D22...",
+      value: searchQuery,
+      onChange: (e) => setSearchQuery(e.target.value),
+      className: "w-full pl-10 pr-4 py-2 bg-white/50 dark:bg-slate-900/50 rounded-2xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm" }
+    ),
+    searchQuery && /*#__PURE__*/
+    React.createElement("button", { onClick: () => setSearchQuery(""), className: "absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "x", className: "w-4 h-4" })
+    )
+
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "flex items-center gap-3 self-end md:self-auto" },
+    selectedTag && /*#__PURE__*/
+    React.createElement("div", { className: "lg:hidden flex items-center gap-1 bg-brand-100 dark:bg-brand-950/40 text-brand-800 dark:text-brand-300 px-3 py-1.5 rounded-2xl text-xs" }, "#",
+    selectedTag, /*#__PURE__*/
+    React.createElement("button", { onClick: () => setSelectedTag(null) }, /*#__PURE__*/React.createElement("i", { "data-lucide": "x", className: "w-3 h-3" }))
+    ), /*#__PURE__*/
+
+
+    React.createElement("div", { className: "bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl flex gap-1 border border-slate-200/50 dark:border-slate-700/50" }, /*#__PURE__*/
+    React.createElement("button", {
+      onClick: () => setSortBy("newest"),
+      className: `px-3 py-1.5 text-xs font-semibold rounded-xl transition-all ${
+      sortBy === "newest" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-800"}` },
+
+    "\u65B0\u7740\u9806"
+
+    ), /*#__PURE__*/
+    React.createElement("button", {
+      onClick: () => setSortBy("popular"),
+      className: `px-3 py-1.5 text-xs font-semibold rounded-xl transition-all ${
+      sortBy === "popular" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-800"}` },
+
+    "\u4EBA\u6C17\u9806"
+
+    )
+    )
+    )
+    ), /*#__PURE__*/
+
+
+    React.createElement("div", { className: "space-y-4" },
+    filteredAndSortedPosts.length === 0 ? /*#__PURE__*/
+    React.createElement("div", { className: "glass rounded-3xl p-12 text-center text-slate-400 border border-white/60 dark:border-slate-800" }, /*#__PURE__*/
+    React.createElement("i", { "data-lucide": "inbox", className: "w-12 h-12 mx-auto mb-4 text-slate-300" }), /*#__PURE__*/
+    React.createElement("p", { className: "font-semibold text-sm" }, "\u8A72\u5F53\u3059\u308B\u610F\u898B\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093"), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs mt-1" }, "\u6700\u521D\u306E\u610F\u898B\u3092\u6295\u7A3F\u3057\u3066\u307F\u307E\u3057\u3087\u3046\uFF01")
+    ) :
+
+    filteredAndSortedPosts.map((post) => {
+      const hasLiked = post.likedBy && post.likedBy.includes(userId);
+      const isBanned = bannedUsers.includes(post.authorId);
+
+      return (/*#__PURE__*/
+        React.createElement("div", {
+          key: post.id,
+          className: `glass rounded-3xl p-5 md:p-6 shadow-md border hover:shadow-lg hover:scale-[1.01] transition-all duration-300 animate-slide-in relative ${
+          isBanned ? "opacity-60 border-slate-300 dark:border-slate-800" : "border-white/60 dark:border-slate-800/80"}` }, /*#__PURE__*/
+
+
+        React.createElement("div", { className: "flex justify-between items-start gap-4 mb-3" }, /*#__PURE__*/
+        React.createElement("div", { className: "flex items-center gap-2.5" }, /*#__PURE__*/
+        React.createElement("div", { className: "w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-100 to-purple-100 dark:from-slate-800 dark:to-slate-700 flex items-center justify-center font-bold text-brand-600 dark:text-brand-400 text-sm" },
+        post.name.charAt(0)
+        ), /*#__PURE__*/
+        React.createElement("div", null, /*#__PURE__*/
+        React.createElement("div", { className: "flex items-center gap-1.5" }, /*#__PURE__*/
+        React.createElement("span", { className: "font-semibold text-sm text-slate-800 dark:text-slate-200" }, post.name),
+        isBanned && /*#__PURE__*/
+        React.createElement("span", { className: "px-1.5 py-0.2 text-[9px] font-medium bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300 rounded border border-rose-200" }, "BAN\u30E6\u30FC\u30B6\u30FC"
+
+        )
+
+        ), /*#__PURE__*/
+        React.createElement("span", { className: "text-[10px] text-slate-400 dark:text-slate-500" },
+        new Date(post.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        " · ",
+        new Date(post.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })
+        )
+        )
+        ),
+
+        isAdminMode && /*#__PURE__*/
+        React.createElement("div", { className: "flex items-center gap-1.5" }, /*#__PURE__*/
+        React.createElement("button", {
+          onClick: () => handleToggleBan(post.authorId),
+          disabled: !post.authorId,
+          className: `p-1.5 rounded-lg border text-xs transition flex items-center gap-1 ${
+          isBanned ?
+          "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100" :
+          "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"}` }, /*#__PURE__*/
+
+
+        React.createElement("i", { "data-lucide": "user-minus", className: "w-3.5 h-3.5" }), /*#__PURE__*/
+        React.createElement("span", { className: "hidden sm:inline" }, isBanned ? "解除" : "BAN")
+        ), /*#__PURE__*/
+        React.createElement("button", {
+          onClick: () => handleDeletePost(post.id),
+          className: "p-1.5 bg-slate-50 text-slate-600 border border-slate-200 hover:bg-rose-100 rounded-lg text-xs transition flex items-center gap-1" }, /*#__PURE__*/
+
+        React.createElement("i", { "data-lucide": "trash-2", className: "w-3.5 h-3.5" }), /*#__PURE__*/
+        React.createElement("span", { className: "hidden sm:inline" }, "\u524A\u9664")
+        )
+        )
+
+        ), /*#__PURE__*/
+
+        React.createElement("p", { className: "text-sm leading-relaxed text-slate-700 dark:text-slate-300 mb-4 whitespace-pre-wrap" },
+        post.content
+        ), /*#__PURE__*/
+
+        React.createElement("div", { className: "flex items-center justify-between gap-4 pt-3 border-t border-slate-100 dark:border-slate-800/80" }, /*#__PURE__*/
+        React.createElement("div", { className: "flex flex-wrap gap-1.5" },
+        post.tags.map((tag, idx) => /*#__PURE__*/
+        React.createElement("span", {
+          key: idx,
+          onClick: () => setSelectedTag(selectedTag === tag ? null : tag),
+          className: `text-[11px] px-2 py-0.5 rounded-md cursor-pointer transition ${
+          selectedTag === tag ?
+          "bg-brand-500 text-white" :
+          "bg-brand-50/70 hover:bg-brand-100 text-brand-600 dark:bg-slate-800/80 dark:hover:bg-slate-700 dark:text-brand-300"}` },
+
+        "#",
+        tag
+        )
+        )
+        ), /*#__PURE__*/
+
+        React.createElement("button", {
+          onClick: () => handleLike(post.id),
+          disabled: bannedUsers.includes(userId),
+          className: `flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all duration-200 ${
+          hasLiked ?
+          "bg-rose-50 text-rose-600 dark:bg-rose-950/30 border border-rose-200/50" :
+          "bg-slate-50 text-slate-500 border border-slate-200/50 dark:bg-slate-800/40 dark:text-slate-400"}` }, /*#__PURE__*/
+
+
+        React.createElement("i", { "data-lucide": "heart", className: `w-4 h-4 ${hasLiked ? "fill-rose-500 stroke-rose-500 animate-bounce-subtle" : ""}` }), /*#__PURE__*/
+        React.createElement("span", null, post.likes)
+        )
+        )
+        ));
+
+    })
+
+    )
+    )
+
+    ), /*#__PURE__*/
+
+    React.createElement("footer", { className: "text-center text-xs text-slate-400 dark:text-slate-500 mt-16 pt-8 border-t border-slate-200/50 dark:bg-transparent" }, /*#__PURE__*/
+    React.createElement("p", null, "\xA9 2026 Voicely. All rights reserved.")
+    ),
+
+    toast && /*#__PURE__*/
+    React.createElement("div", { className: `fixed bottom-5 right-5 z-50 px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2 border animate-slide-in text-sm font-medium ${
+      toast.type === "error" ? "bg-rose-50 border-rose-200 text-rose-800" : "bg-emerald-50 border-emerald-200 text-emerald-800"}` }, /*#__PURE__*/
+
+    React.createElement("i", { "data-lucide": toast.type === "error" ? "alert-circle" : "check-circle-2", className: "w-4 h-4" }), /*#__PURE__*/
+    React.createElement("span", null, toast.message)
+    )
+
+
+    ));
+
+}
+
+const container = document.getElementById('root');
+const root = ReactDOM.createRoot(container);
+root.render(/*#__PURE__*/React.createElement(App, null));</script>
+</body>
+</html>
